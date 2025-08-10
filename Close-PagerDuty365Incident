@@ -1,0 +1,510 @@
+<#
+.SYNOPSIS
+Resolves (closes) a PagerDuty incident
+
+.DESCRIPTION
+This script resolves a PagerDuty incident using the REST API.
+Can find incidents by ID, title, or dedup key.
+
+IMPORTANT: The UserEmail parameter must be a valid PagerDuty user's email address.
+
+.PARAMETER ApiToken
+PagerDuty REST API token (required)
+
+.PARAMETER IncidentId
+The ID of the incident to resolve (required unless using other search methods)
+
+.PARAMETER UserEmail
+Email address of the user resolving the incident (required)
+MUST be a valid PagerDuty user email address with appropriate permissions
+
+.PARAMETER ResolutionNote
+Optional note to add when resolving the incident
+
+.PARAMETER FindIncidentByTitle
+Switch to search for incident by title instead of using ID
+
+.PARAMETER IncidentTitle
+Title or partial title to search for (used with -FindIncidentByTitle)
+
+.PARAMETER FindIncidentByDedupKey
+Switch to search for incident by dedup key instead of using ID
+
+.PARAMETER DedupKey
+Dedup key from incident creation to search for (used with -FindIncidentByDedupKey)
+
+.PARAMETER ListIncidents
+Just list all active incidents without resolving
+
+.PARAMETER Force
+Skip confirmation prompt
+
+.EXAMPLE
+# List all active incidents to find the right ID
+.\Resolve-PagerDutyIncident.ps1 -ApiToken "your_api_token" -ListIncidents -UserEmail "analyst@company.com"
+
+.EXAMPLE
+# Resolve using incident ID directly
+.\Resolve-PagerDutyIncident.ps1 -ApiToken "your_api_token" -IncidentId "P1234567" -UserEmail "analyst@company.com"
+
+.EXAMPLE
+# Resolve by title with a resolution note
+.\Resolve-PagerDutyIncident.ps1 -ApiToken "your_api_token" -FindIncidentByTitle -IncidentTitle "disk space" -ResolutionNote "Cleaned up logs, disk space restored" -UserEmail "analyst@company.com"
+
+.EXAMPLE
+# Resolve without confirmation prompt
+.\Resolve-PagerDutyIncident.ps1 -ApiToken "your_api_token" -IncidentId "P1234567" -UserEmail "analyst@company.com" -Force
+
+.NOTES
+- API token: Found in PagerDuty under User Settings > API Access Keys
+- UserEmail MUST be a valid PagerDuty user email
+- The script will ask for confirmation before resolving unless -Force is used
+- Only active incidents (triggered/acknowledged) can be resolved
+- Use -Verbose for additional debug information
+
+Author: Geoff Tankersley
+Version: 1.0
+#>
+
+param(
+    [Parameter(Mandatory=$true)]
+    [string]$ApiToken,
+    
+    [Parameter(Mandatory=$false)]
+    [string]$IncidentId,
+    
+    [Parameter(Mandatory=$true)]
+    [string]$UserEmail,
+    
+    [Parameter(Mandatory=$false)]
+    [string]$ResolutionNote = "",
+    
+    [Parameter(Mandatory=$false)]
+    [switch]$FindIncidentByTitle,
+    
+    [Parameter(Mandatory=$false)]
+    [string]$IncidentTitle = "",
+    
+    [Parameter(Mandatory=$false)]
+    [switch]$FindIncidentByDedupKey,
+    
+    [Parameter(Mandatory=$false)]
+    [string]$DedupKey = "",
+    
+    [Parameter(Mandatory=$false)]
+    [switch]$ListIncidents,
+    
+    [Parameter(Mandatory=$false)]
+    [switch]$Force
+)
+
+function Resolve-PagerDutyIncident {
+    param(
+        [string]$ApiToken,
+        [string]$IncidentId,
+        [string]$UserEmail,
+        [string]$ResolutionNote
+    )
+    
+    # PagerDuty REST API endpoint for updating a specific incident
+    $Uri = "https://api.pagerduty.com/incidents/$IncidentId"
+    
+    # Headers - From header is REQUIRED and must be a valid PagerDuty user email
+    $Headers = @{
+        "Authorization" = "Token token=$ApiToken"
+        "Content-Type" = "application/json"
+        "Accept" = "application/vnd.pagerduty+json;version=2"
+        "From" = $UserEmail  # This is MANDATORY and must be a valid PagerDuty user email
+    }
+    
+    # Build the payload - for single incident update
+    $Payload = @{
+        incident = @{
+            type = "incident"
+            status = "resolved"
+        }
+    }
+    
+    # Add resolution note if provided
+    if ($ResolutionNote) {
+        $Payload.incident.resolution = $ResolutionNote
+    }
+    
+    # Convert to JSON
+    $JsonPayload = $Payload | ConvertTo-Json -Depth 3
+    
+    try {
+        Write-Host "Resolving incident $IncidentId..." -ForegroundColor Yellow
+        if ($ResolutionNote) {
+            Write-Host "Resolution note: $($ResolutionNote.Substring(0, [Math]::Min(100, $ResolutionNote.Length)))$(if($ResolutionNote.Length -gt 100){'...'})" -ForegroundColor Cyan
+        }
+        Write-Host "Resolved by: $UserEmail" -ForegroundColor Gray
+        
+        Write-Verbose "Headers: $($Headers | ConvertTo-Json)"
+        Write-Verbose "JSON Payload: $JsonPayload"
+        
+        # Make the API call
+        $Response = Invoke-RestMethod -Uri $Uri -Method Put -Body $JsonPayload -Headers $Headers
+        
+        $ResolvedIncident = $Response.incident
+        
+        Write-Host "✓ Incident resolved successfully!" -ForegroundColor Green
+        Write-Host "Incident: $($ResolvedIncident.id) - $($ResolvedIncident.title)" -ForegroundColor Green
+        Write-Host "Status: $($ResolvedIncident.status)" -ForegroundColor Green
+        Write-Host "Resolved at: $($ResolvedIncident.last_status_change_at)" -ForegroundColor Green
+        
+        return $ResolvedIncident
+    }
+    catch {
+        $StatusCode = $_.Exception.Response.StatusCode
+        Write-Error "Failed to resolve PagerDuty incident: $StatusCode"
+        
+        # Extract error details
+        if ($_.ErrorDetails.Message) {
+            $errorJson = $_.ErrorDetails.Message | ConvertFrom-Json -ErrorAction SilentlyContinue
+            if ($errorJson) {
+                Write-Host "API Error:" -ForegroundColor Red
+                Write-Host "  Code: $($errorJson.error.code)" -ForegroundColor Red
+                Write-Host "  Message: $($errorJson.error.message)" -ForegroundColor Red
+                if ($errorJson.error.errors) {
+                    Write-Host "  Details: $($errorJson.error.errors -join ', ')" -ForegroundColor Red
+                }
+                
+                # Common error codes
+                if ($errorJson.error.code -eq 1008) {
+                    Write-Host "`nNote: Error 1008 means 'Requester User Not Found'. Ensure that:" -ForegroundColor Yellow
+                    Write-Host "  - The email address '$UserEmail' belongs to a valid PagerDuty user" -ForegroundColor Yellow
+                    Write-Host "  - The user has appropriate permissions to resolve incidents" -ForegroundColor Yellow
+                }
+            }
+            else {
+                Write-Host "Raw error: $($_.ErrorDetails.Message)" -ForegroundColor Red
+            }
+        }
+        throw
+    }
+}
+
+function Test-PagerDutyApiToken {
+    param([string]$ApiToken)
+    
+    $Headers = @{
+        "Authorization" = "Token token=$ApiToken"
+        "Accept" = "application/vnd.pagerduty+json;version=2"
+    }
+    
+    try {
+        Write-Host "Testing API token..." -ForegroundColor Yellow
+        Write-Verbose "Token: $($ApiToken.Substring(0, [Math]::Min(10, $ApiToken.Length)))..."
+        
+        # Test with abilities endpoint
+        $Response = Invoke-RestMethod -Uri "https://api.pagerduty.com/abilities" -Method Get -Headers $Headers
+        Write-Host "✓ API token is valid" -ForegroundColor Green
+        return $true
+    }
+    catch {
+        Write-Error "API token validation failed: $($_.Exception.Message)"
+        if ($_.ErrorDetails.Message) {
+            Write-Host "Error details: $($_.ErrorDetails.Message)" -ForegroundColor Red
+        }
+        return $false
+    }
+}
+
+function Find-PagerDutyIncidentByDedupKey {
+    param(
+        [string]$ApiToken,
+        [string]$DedupKey
+    )
+    
+    $Headers = @{
+        "Authorization" = "Token token=$ApiToken"
+        "Accept" = "application/vnd.pagerduty+json;version=2"
+    }
+    
+    Write-Host "Searching for incident with dedup key: '$DedupKey'..." -ForegroundColor Yellow
+    
+    # Search recent incidents
+    $Since = (Get-Date).AddDays(-7).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+    $Uri = "https://api.pagerduty.com/incidents?since=$Since&limit=100&include[]=first_trigger_log_entries"
+    
+    try {
+        $Response = Invoke-RestMethod -Uri $Uri -Method Get -Headers $Headers
+        
+        Write-Host "Checking $($Response.incidents.Count) recent incidents..." -ForegroundColor Gray
+        
+        foreach ($incident in $Response.incidents) {
+            # Check first trigger log entry
+            if ($incident.first_trigger_log_entry -and 
+                $incident.first_trigger_log_entry.channel -and 
+                $incident.first_trigger_log_entry.channel.details -and
+                $incident.first_trigger_log_entry.channel.details.dedup_key -eq $DedupKey) {
+                Write-Host "Found incident: $($incident.id) - $($incident.title)" -ForegroundColor Green
+                return $incident
+            }
+            
+            # Check incident_key as fallback
+            if ($incident.incident_key -eq $DedupKey) {
+                Write-Host "Found incident via incident_key: $($incident.id) - $($incident.title)" -ForegroundColor Green
+                return $incident
+            }
+        }
+        
+        Write-Warning "No incident found with dedup key: '$DedupKey'"
+        return $null
+    }
+    catch {
+        Write-Error "Failed to search by dedup key: $($_.Exception.Message)"
+        throw
+    }
+}
+
+function Find-PagerDutyIncident {
+    param(
+        [string]$ApiToken,
+        [string]$IncidentTitle,
+        [switch]$ActiveOnly
+    )
+    
+    $Headers = @{
+        "Authorization" = "Token token=$ApiToken"
+        "Accept" = "application/vnd.pagerduty+json;version=2"
+    }
+    
+    try {
+        Write-Host "Searching for incidents..." -ForegroundColor Yellow
+        if ($IncidentTitle) {
+            Write-Host "Search term: '$IncidentTitle'" -ForegroundColor Gray
+        }
+        
+        # Get incidents
+        $BaseUri = "https://api.pagerduty.com/incidents"
+        
+        # For resolving, we want active incidents only
+        if ($ActiveOnly) {
+            $Uri = "${BaseUri}?statuses[]=triggered&statuses[]=acknowledged&limit=100"
+            Write-Verbose "Fetching active incidents only"
+        }
+        else {
+            $Uri = "${BaseUri}?limit=100"
+        }
+        
+        Write-Verbose "Fetching incidents from: $Uri"
+        
+        $FilteredIncidents = $null
+        try {
+            $Response = Invoke-RestMethod -Uri $Uri -Method Get -Headers $Headers
+            Write-Host "Retrieved $($Response.incidents.Count) incidents from API" -ForegroundColor Gray
+            $FilteredIncidents = $Response.incidents
+        }
+        catch {
+            # If status parameter fails, fall back to getting all and filtering
+            Write-Verbose "Status parameter failed, falling back to fetch all and filter locally"
+            $Uri = "${BaseUri}?limit=100"
+            $Response = Invoke-RestMethod -Uri $Uri -Method Get -Headers $Headers
+            Write-Host "Retrieved $($Response.incidents.Count) incidents (fallback method)" -ForegroundColor Gray
+            
+            if ($ActiveOnly) {
+                $FilteredIncidents = $Response.incidents | Where-Object { 
+                    $_.status -eq 'triggered' -or $_.status -eq 'acknowledged' 
+                }
+                Write-Host "Active incidents after filtering: $($FilteredIncidents.Count)" -ForegroundColor Gray
+            }
+            else {
+                $FilteredIncidents = $Response.incidents
+            }
+        }
+        
+        # Show all incidents
+        if ($FilteredIncidents.Count -gt 0 -and -not $IncidentTitle) {
+            Write-Host "`nShowing available incidents:" -ForegroundColor Cyan
+            Write-Host "ID          | Status       | Title" -ForegroundColor Gray
+            Write-Host "----------- | ------------ | -----" -ForegroundColor Gray
+            
+            $FilteredIncidents | ForEach-Object {
+                $statusColor = switch ($_.status) {
+                    'triggered' { 'Red' }
+                    'acknowledged' { 'Yellow' }
+                    'resolved' { 'DarkGray' }
+                    default { 'Gray' }
+                }
+                
+                $titleDisplay = if ($_.title.Length -gt 60) { 
+                    $_.title.Substring(0, 57) + "..." 
+                } else { 
+                    $_.title 
+                }
+                
+                Write-Host "$($_.incident_number.ToString().PadRight(11)) | " -NoNewline
+                Write-Host "$($_.status.PadRight(12))" -ForegroundColor $statusColor -NoNewline
+                Write-Host " | $titleDisplay"
+            }
+            return $null
+        }
+        
+        # Filter by title if provided
+        if ($IncidentTitle) {
+            $MatchingIncidents = $FilteredIncidents | Where-Object { 
+                $_.title -like "*$IncidentTitle*" 
+            }
+            
+            if ($MatchingIncidents.Count -eq 0) {
+                Write-Warning "`nNo incidents found with '$IncidentTitle' in the title"
+                return $null
+            }
+            elseif ($MatchingIncidents.Count -eq 1) {
+                $Incident = $MatchingIncidents[0]
+                Write-Host "`n✓ Found matching incident:" -ForegroundColor Green
+                Write-Host "  ID: $($Incident.id)" -ForegroundColor Green
+                Write-Host "  Title: $($Incident.title)" -ForegroundColor Green
+                Write-Host "  Status: $($Incident.status)" -ForegroundColor Green
+                return $Incident
+            }
+            else {
+                Write-Host "`nMultiple incidents found matching '$IncidentTitle':" -ForegroundColor Yellow
+                $MatchingIncidents | ForEach-Object { 
+                    Write-Host "  $($_.id) - $($_.title) [$($_.status)]" -ForegroundColor Cyan
+                }
+                
+                # Return the most recent one
+                $MostRecent = $MatchingIncidents | Sort-Object created_at -Descending | Select-Object -First 1
+                Write-Host "`nUsing most recent: $($MostRecent.id)" -ForegroundColor Green
+                return $MostRecent
+            }
+        }
+        
+        return $null
+    }
+    catch {
+        Write-Error "Failed to search for incidents: $($_.Exception.Message)"
+        if ($_.ErrorDetails.Message) {
+            Write-Host "Error details:" -ForegroundColor Red
+            Write-Host $_.ErrorDetails.Message -ForegroundColor Red
+        }
+        throw
+    }
+}
+
+function Get-PagerDutyIncidentInfo {
+    param(
+        [string]$ApiToken,
+        [string]$IncidentId
+    )
+    
+    $Uri = "https://api.pagerduty.com/incidents/$IncidentId"
+    
+    $Headers = @{
+        "Authorization" = "Token token=$ApiToken"
+        "Accept" = "application/vnd.pagerduty+json;version=2"
+    }
+    
+    try {
+        $Response = Invoke-RestMethod -Uri $Uri -Method Get -Headers $Headers
+        return $Response.incident
+    }
+    catch {
+        Write-Error "Failed to get incident info: $($_.Exception.Message)"
+        return $null
+    }
+}
+
+# Main execution
+Write-Host "`n=== PagerDuty Incident Resolution Script ===" -ForegroundColor Cyan
+Write-Host "User Email: $UserEmail" -ForegroundColor Gray
+
+# Test API token first
+if (-not (Test-PagerDutyApiToken -ApiToken $ApiToken)) {
+    Write-Error "API token validation failed. Please check your token."
+    exit 1
+}
+
+try {
+    # Determine the incident
+    $TargetIncident = $null
+    
+    # If just listing incidents
+    if ($ListIncidents) {
+        Write-Host "`nListing active incidents..." -ForegroundColor Cyan
+        $null = Find-PagerDutyIncident -ApiToken $ApiToken -ActiveOnly
+        Write-Host "`nUse one of the incident IDs above with -IncidentId parameter" -ForegroundColor Yellow
+        exit 0
+    }
+    
+    if ($FindIncidentByDedupKey -and $DedupKey) {
+        Write-Host "`nFinding incident by dedup key..." -ForegroundColor Cyan
+        $TargetIncident = Find-PagerDutyIncidentByDedupKey -ApiToken $ApiToken -DedupKey $DedupKey
+        if (-not $TargetIncident) {
+            Write-Error "Could not find incident with dedup key: '$DedupKey'"
+            exit 1
+        }
+    }
+    elseif ($FindIncidentByTitle -and $IncidentTitle) {
+        Write-Host "`nFinding incident by title..." -ForegroundColor Cyan
+        $TargetIncident = Find-PagerDutyIncident -ApiToken $ApiToken -IncidentTitle $IncidentTitle -ActiveOnly
+        if (-not $TargetIncident) {
+            Write-Error "Could not find active incident matching title: '$IncidentTitle'"
+            exit 1
+        }
+    }
+    elseif ($IncidentId) {
+        # Get incident info
+        Write-Host "`nVerifying incident..." -ForegroundColor Cyan
+        $TargetIncident = Get-PagerDutyIncidentInfo -ApiToken $ApiToken -IncidentId $IncidentId
+        if (-not $TargetIncident) {
+            Write-Error "Incident $IncidentId not found"
+            exit 1
+        }
+    }
+    else {
+        Write-Error "Must provide either -IncidentId, -FindIncidentByTitle with -IncidentTitle, -FindIncidentByDedupKey with -DedupKey, or -ListIncidents"
+        exit 1
+    }
+    
+    # Extract the ID if we got a full incident object
+    if ($TargetIncident.id) {
+        $ActualIncidentId = $TargetIncident.id
+    }
+    else {
+        $ActualIncidentId = $TargetIncident
+        # Get full incident info
+        $TargetIncident = Get-PagerDutyIncidentInfo -ApiToken $ApiToken -IncidentId $ActualIncidentId
+    }
+    
+    # Show incident info
+    Write-Host "`n✓ Incident found: $($TargetIncident.title)" -ForegroundColor Green
+    Write-Host "  ID: $($TargetIncident.id)" -ForegroundColor Gray
+    Write-Host "  Status: $($TargetIncident.status)" -ForegroundColor Gray
+    Write-Host "  Service: $($TargetIncident.service.summary)" -ForegroundColor Gray
+    Write-Host "  Created: $($TargetIncident.created_at)" -ForegroundColor Gray
+    
+    # Check if already resolved
+    if ($TargetIncident.status -eq 'resolved') {
+        Write-Warning "`nIncident is already resolved!"
+        Write-Host "Resolved at: $($TargetIncident.resolved_at)" -ForegroundColor Gray
+        exit 0
+    }
+    
+    # Confirm resolution
+    if (-not $Force) {
+        Write-Host "`nAre you sure you want to resolve this incident?" -ForegroundColor Yellow
+        $confirmation = Read-Host "Type 'yes' to confirm"
+        if ($confirmation -ne 'yes') {
+            Write-Host "Resolution cancelled." -ForegroundColor Red
+            exit 0
+        }
+    }
+    
+    # Resolve the incident
+    Write-Host "`nResolving incident..." -ForegroundColor Cyan
+    $Result = Resolve-PagerDutyIncident -ApiToken $ApiToken -IncidentId $ActualIncidentId -UserEmail $UserEmail -ResolutionNote $ResolutionNote
+    
+    Write-Host "`n✓ Script completed successfully!" -ForegroundColor Green
+    
+    # Output result for further processing
+    return $Result
+}
+catch {
+    Write-Error "Script execution failed: $($_.Exception.Message)"
+    exit 1
+}
+
