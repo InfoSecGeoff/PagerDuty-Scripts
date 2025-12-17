@@ -605,10 +605,10 @@ function Generate-SOCReportHTML {
         new Chart(trendCtx, {
             type: 'line',
             data: {
-                labels: [$($Analytics.DailyTrend | ForEach-Object { "'$($_.Date)'" } | Join-String -Separator ', ')],
+                labels: [$(($Analytics.DailyTrend | ForEach-Object { "'$($_.Date)'" }) -join ', ')],
                 datasets: [{
                     label: 'Incidents per Day',
-                    data: [$($Analytics.DailyTrend | ForEach-Object { $_.Count } | Join-String -Separator ', ')],
+                    data: [$(($Analytics.DailyTrend | ForEach-Object { $_.Count }) -join ', ')],
                     borderColor: '#667eea',
                     backgroundColor: 'rgba(102, 126, 234, 0.1)',
                     borderWidth: 3,
@@ -632,9 +632,9 @@ function Generate-SOCReportHTML {
         new Chart(assigneeCtx, {
             type: 'doughnut',
             data: {
-                labels: [$($Analytics.AssigneeDistribution | Select-Object -First 8 | ForEach-Object { "'$($_.Assignee)'" } | Join-String -Separator ', ')],
+                labels: [$(($Analytics.AssigneeDistribution | Select-Object -First 8 | ForEach-Object { "'$($_.Assignee)'" }) -join ', ')],
                 datasets: [{
-                    data: [$($Analytics.AssigneeDistribution | Select-Object -First 8 | ForEach-Object { $_.Count } | Join-String -Separator ', ')],
+                    data: [$(($Analytics.AssigneeDistribution | Select-Object -First 8 | ForEach-Object { $_.Count }) -join ', ')],
                     backgroundColor: ['#667eea', '#764ba2', '#f093fb', '#f5576c', '#4facfe', '#00f2fe', '#43e97b', '#38f9d7']
                 }]
             },
@@ -650,9 +650,9 @@ function Generate-SOCReportHTML {
         new Chart(urgencyCtx, {
             type: 'pie',
             data: {
-                labels: [$($Analytics.UrgencyDistribution | ForEach-Object { "'$($_.Urgency)'" } | Join-String -Separator ', ')],
+                labels: [$(($Analytics.UrgencyDistribution | ForEach-Object { "'$($_.Urgency)'" }) -join ', ')],
                 datasets: [{
-                    data: [$($Analytics.UrgencyDistribution | ForEach-Object { $_.Count } | Join-String -Separator ', ')],
+                    data: [$(($Analytics.UrgencyDistribution | ForEach-Object { $_.Count }) -join ', ')],
                     backgroundColor: ['#dc3545', '#ffc107']
                 }]
             },
@@ -668,10 +668,10 @@ function Generate-SOCReportHTML {
         new Chart(hourlyCtx, {
             type: 'bar',
             data: {
-                labels: [$($Analytics.HourlyDistribution | ForEach-Object { $_.Hour } | Join-String -Separator ', ')],
+                labels: [$(($Analytics.HourlyDistribution | ForEach-Object { $_.Hour }) -join ', ')],
                 datasets: [{
                     label: 'Incidents',
-                    data: [$($Analytics.HourlyDistribution | ForEach-Object { $_.Count } | Join-String -Separator ', ')],
+                    data: [$(($Analytics.HourlyDistribution | ForEach-Object { $_.Count }) -join ', ')],
                     backgroundColor: 'rgba(102, 126, 234, 0.6)',
                     borderColor: '#667eea',
                     borderWidth: 1
@@ -693,10 +693,10 @@ function Generate-SOCReportHTML {
         new Chart(dowCtx, {
             type: 'bar',
             data: {
-                labels: [$($Analytics.DayOfWeekDistribution | ForEach-Object { "'$($_.DayOfWeek)'" } | Join-String -Separator ', ')],
+                labels: [$(($Analytics.DayOfWeekDistribution | ForEach-Object { "'$($_.DayOfWeek)'" }) -join ', ')],
                 datasets: [{
                     label: 'Incidents',
-                    data: [$($Analytics.DayOfWeekDistribution | ForEach-Object { $_.Count } | Join-String -Separator ', ')],
+                    data: [$(($Analytics.DayOfWeekDistribution | ForEach-Object { $_.Count }) -join ', ')],
                     backgroundColor: 'rgba(118, 75, 162, 0.6)',
                     borderColor: '#764ba2',
                     borderWidth: 1
